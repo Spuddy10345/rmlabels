@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="layout">
+  <section class="add">
+    <form id="upload" class="card drop" hx-post="/upload" hx-encoding="multipart/form-data"
+          hx-target="#panel" hx-include="#controls">
+      <input id="files" type="file" name="files" multiple accept="{{ accept }}">
+      <label for="files">
+        <b>Add labels</b>
+        <span class="muted">Drop PDFs or images here, paste a screenshot, or tap to choose</span>
+      </label>
+    </form>
+
+    <form class="card" hx-post="/text" hx-target="#panel" hx-include="#controls"
+          hx-on::after-request="if (event.detail.successful) this.reset()">
+      <b>Text label</b>
+      <textarea name="text" rows="4" placeholder="A note, return address, FRAGILE…"></textarea>
+      <div class="row">
+        <button type="submit">Add text label</button>
+        {% for name in presets %}
+        <button type="submit" class="ghost" name="preset" value="{{ name }}" title="{{ presets[name] }}">+ {{ name }}</button>
+        {% endfor %}
+      </div>
+    </form>
+
+    {% if mail_on %}
+    <form class="card row" hx-post="/mail/check" hx-target="#panel" hx-include="#controls">
+      <b>Email</b><span class="muted grow">checked every 5 minutes</span>
+      <button type="submit" class="ghost">Check now</button>
+    </form>
+    {% endif %}
+  </section>
+
+  <section id="panel">{{ panel|safe }}</section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const form = document.getElementById('upload'), input = document.getElementById('files');
+  const send = files => { if (!files.length) return; const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f); input.files = dt.files; form.requestSubmit(); };
+  input.addEventListener('change', () => form.requestSubmit());
+  form.addEventListener('htmx:afterRequest', () => { input.value = ''; });
+  ['dragenter', 'dragover'].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); form.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); form.classList.remove('over'); }));
+  document.addEventListener('drop', ev => send(ev.dataTransfer.files));
+  document.addEventListener('paste', ev => {
+    if (ev.target.closest('textarea')) return;
+    const files = [...ev.clipboardData.items].filter(i => i.kind === 'file').map(i => i.getAsFile());
+    if (files.length) { ev.preventDefault(); send(files.map((f, n) => new File([f], f.name && f.name !== 'image.png' ? f.name : `pasted-${Date.now()}-${n}.png`, {type: f.type}))); }
+  });
+</script>
+{% endblock %}

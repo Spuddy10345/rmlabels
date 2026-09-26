@@ -1,0 +1,78 @@
+{% if message %}<div class="flash {{ 'error' if error }}" role="status">{{ message }}</div>{% endif %}
+
+<form id="controls" class="card" hx-get="/panel" hx-trigger="change" hx-target="#panel">
+  <div class="controls">
+    <fieldset class="picker">
+      <legend>Start at</legend>
+      <div class="mini-sheet">
+        {% for n in range(1, 5) %}
+        <label class="{{ 'used' if n - 1 < start }}" title="Label {{ n }}">
+          <input type="radio" name="start" value="{{ n }}" {{ 'checked' if n - 1 == start }}>
+          <span>{{ n }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <small class="muted">{% if saved_start %}Saved: {{ saved_start + 1 }} is next free{% else %}Saved: fresh sheet{% endif %}</small>
+    </fieldset>
+    <div class="toggles">
+      <label><input type="checkbox" name="mono" value="1" {{ 'checked' if mono }}> Black ink only</label>
+      <label><input type="checkbox" name="fill" value="1" {{ 'checked' if fill }}> Enlarge small labels</label>
+      <label><input type="checkbox" name="draft" value="1" {{ 'checked' if draft }}> Draft quality</label>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="row head">
+    <b class="grow">Queue</b>
+    {% if rows %}
+    <button class="ghost small" hx-post="/clear" hx-include="#controls" hx-target="#panel"
+            hx-confirm="Remove everything from the queue?">Clear</button>
+    {% endif %}
+  </div>
+  {% if not rows %}
+  <p class="muted empty">Nothing queued. Add label files or a text label.</p>
+  {% endif %}
+  <ul class="queue">
+    {% for r in rows %}{% set it = r.item %}
+    <li>
+      <div class="thumb">
+        {% if r.thumb %}<img src="{{ r.thumb }}" alt="">{% elif it.kind == 'text' %}<span class="t">Aa</span>{% else %}<span class="t">?</span>{% endif %}
+      </div>
+      <div class="grow meta">
+        <div class="name">{{ it.text if it.kind == 'text' else it.name }}</div>
+        <div class="badges">
+          {% if it.kind == 'text' %}<span class="badge">text</span>
+          {% elif r.count == 0 %}<span class="badge bad">no label found</span>
+          {% elif r.count > 1 %}<span class="badge">{{ r.count }} labels</span>{% endif %}
+          {% if it.source in ('mail', 'phone', 'reprint') %}<span class="badge">{{ it.source }}</span>{% endif %}
+          {% if r.printed %}<span class="badge warn" title="The same file was printed before">printed {{ r.printed }}</span>{% endif %}
+        </div>
+      </div>
+      <button class="ghost small" title="Remove" aria-label="Remove {{ it.name }}"
+              hx-post="/items/{{ it.id }}/remove" hx-include="#controls" hx-target="#panel">✕</button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+{% if n_labels %}
+<div class="card actions">
+  <div class="summary">
+    <b>{{ n_labels }} label{{ 's' if n_labels != 1 }}</b> on <b>{{ n_sheets }} sheet{{ 's' if n_sheets != 1 }}</b>,
+    starting at label {{ start + 1 }}.
+    <span class="muted">{% if next_free %}Label {{ next_free }} onward will be left free.{% else %}Last sheet is used up.{% endif %}</span>
+  </div>
+  <div class="row">
+    <a class="button ghost" href="/sheet.pdf?start={{ start + 1 }}{{ '&fill=1' if fill }}" target="_blank">Open PDF</a>
+    <button class="primary grow" hx-post="/print" hx-include="#controls" hx-target="#panel"
+            hx-disabled-elt="this"
+            hx-confirm="Print {{ n_labels }} label{{ 's' if n_labels != 1 }} on {{ n_sheets }} sheet{{ 's' if n_sheets != 1 }}, starting at label {{ start + 1 }}{{ ' in black only' if mono }}?">
+      Print
+    </button>
+  </div>
+</div>
+<div class="previews">
+  {% for src in previews %}<img src="{{ src }}" alt="Sheet {{ loop.index }} preview">{% endfor %}
+</div>
+{% endif %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}History · Labels{% endblock %}
+{% block content %}
+<div class="narrow">
+  {% if not jobs %}<p class="muted">Nothing printed yet.</p>{% endif %}
+  {% for job, items, when in jobs %}
+  <form class="card" method="post" action="/history/requeue">
+    <div class="row head">
+      <b class="grow">{{ when }}</b>
+      <span class="muted">{{ job.labels }} label{{ 's' if job.labels != 1 }} · {{ job.sheets }} sheet{{ 's' if job.sheets != 1 }} · from {{ job.start }}{{ ' · black' if job.mono }}</span>
+    </div>
+    <ul class="queue">
+      {% for it in items %}
+      <li>
+        <label class="row grow">
+          <input type="checkbox" name="item" value="{{ it.id }}" checked>
+          <span class="name grow">{{ it.text if it.kind == 'text' else it.name }}</span>
+          <span class="badge">{{ it.source }}</span>
+        </label>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="row">
+      <a class="button ghost" href="/history/{{ job.id }}/sheet.pdf" target="_blank">Sheet PDF</a>
+      <button type="submit" class="grow">Queue ticked again</button>
+    </div>
+  </form>
+  {% endfor %}
+</div>
+{% endblock %}
