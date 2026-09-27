@@ -64,7 +64,7 @@ rmlabels --text "Please leave with\nnumber 12"      # preview a note
 
 The LaunchAgent `com.finjo.rmlabels-web` runs it at http://127.0.0.1:8765.
 `tailscale serve --bg --https=8765 http://127.0.0.1:8765` makes it available at
-**https://mac.tail9dda7a.ts.net:8765**, from the tailnet only.
+**https://<your-mac>.<your-tailnet>.ts.net:8765**, from the tailnet only.
 
 - Drop files, paste a screenshot (⌘V) or tap to choose. Add text labels, with preset buttons.
 - Pick the start spot on the mini sheet (it defaults to the saved position). The preview shades
@@ -80,7 +80,7 @@ The LaunchAgent `com.finjo.rmlabels-web` runs it at http://127.0.0.1:8765.
 1. Create a new Shortcut. In its details, turn on *Show in Share Sheet* and set it to accept
    **PDFs** and **Images**.
 2. Add *Get Contents of URL* with:
-   - URL: `https://mac.tail9dda7a.ts.net:8765/api/upload`
+   - URL: `https://<your-mac>.<your-tailnet>.ts.net:8765/api/upload`
    - Method: POST
    - Request Body: Form, with a field `file` of type File set to *Shortcut Input*
 3. Add *Get Dictionary Value* for `summary` from *Contents of URL*, then *Show Notification*
