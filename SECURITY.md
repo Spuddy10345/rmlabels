@@ -1,18 +1,27 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-Security fixes are supported on the latest code on `main`.
+Only the latest code on `main` receives security fixes.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Please do not open public issues for security problems.
+Please do not open a public issue for security problems.
 
-Instead, report vulnerabilities privately to the repository owner with:
+Report it privately through GitHub instead: open the repository's **Security** tab and choose
+**Report a vulnerability** ([direct link](https://github.com/Spuddy10345/rmlabels/security/advisories/new)).
 
-- a clear description of the issue
+Please include:
+
+- a description of the issue and its impact
 - steps to reproduce it
-- the affected version or commit, if known
-- any suggested mitigation
+- the affected commit, if known
+- any suggested fix
 
-You should receive an acknowledgement within a few days. After the issue is confirmed, a fix will be prepared and released before public disclosure where possible.
+I aim to acknowledge reports within a few days. Once an issue is confirmed, a fix is released
+before any public disclosure.
+
+## Scope
+
+rmlabels is designed to run locally or on a private network (for example a tailnet). The web UI
+has no authentication of its own, so exposing it to the public internet is outside its intended use.
