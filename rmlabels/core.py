@@ -212,6 +212,13 @@ def union(items) -> pymupdf.Rect:
     return r
 
 
+MIN_LABEL_SHORT, MIN_LABEL_LONG = 85 * MM, 120 * MM  # a cut that leaves cells smaller than this isn't splitting labels apart
+
+
+def plausible_label_size(w: float, h: float) -> bool:
+    return min(w, h) >= MIN_LABEL_SHORT and max(w, h) >= MIN_LABEL_LONG
+
+
 def split_regions(page: pymupdf.Page, items):
     """Split a page into sub-labels along its centre lines when nothing crosses them."""
     W, H = page.rect.width, page.rect.height
@@ -225,6 +232,13 @@ def split_regions(page: pymupdf.Page, items):
 
     xs = [0, W] if crosses_x(W / 2) else [0, W / 2, W]
     ys = [0, H] if crosses_y(H / 2) else [0, H / 2, H]
+    # A cut is only believable if it leaves label-sized cells. Without this, a single label with a
+    # blank band across its middle (2D code above, barcode below) is cut into two "labels".
+    for cut_xs, cut_ys in ((xs, ys), (xs, [0, H]), ([0, W], ys), ([0, W], [0, H])):
+        if all(plausible_label_size(cut_xs[i + 1] - cut_xs[i], cut_ys[j + 1] - cut_ys[j])
+               for i in range(len(cut_xs) - 1) for j in range(len(cut_ys) - 1)):
+            xs, ys = cut_xs, cut_ys
+            break
     regions = []
     for yi in range(len(ys) - 1):
         for xi in range(len(xs) - 1):

@@ -61,12 +61,31 @@ def image_to_pdf(data: bytes) -> pymupdf.Document:
 
 
 def open_source(name: str, path: Path | None = None, data: bytes | None = None):
-    """(name, document) for a PDF or image, from a path or raw bytes."""
+    """(name, document) for a PDF or image, from a path or raw bytes.
+
+    What the file *contains* decides how it is read, not its extension: a PNG saved as .pdf
+    (or a PDF saved as .png) still works. Anything unreadable raises ValueError with a
+    message fit to show the user."""
     ext = Path(name).suffix.lower()
-    if ext in PDF_EXT:
-        doc = pymupdf.open(path) if path else pymupdf.open(stream=data, filetype="pdf")
-    elif ext in IMAGE_EXT:
-        doc = image_to_pdf(data if data is not None else Path(path).read_bytes())
-    else:
+    if ext not in SUPPORTED:
         raise ValueError(f"unsupported file type: {name}")
+    if data is None:
+        data = Path(path).read_bytes()
+    if not data:
+        raise ValueError("the file is empty")
+    try:
+        if data.lstrip()[:5] == b"%PDF-":
+            doc = pymupdf.open(stream=data, filetype="pdf")
+            if doc.needs_pass:
+                raise ValueError("the PDF is password-protected")
+            if not doc.page_count:
+                raise ValueError("the PDF has no pages")
+        else:
+            doc = image_to_pdf(data)
+    except ValueError:
+        raise
+    except Image.DecompressionBombError as e:
+        raise ValueError("the image is far too large to be a label") from e
+    except Exception as e:
+        raise ValueError("it isn't a readable PDF or image") from e
     return name, doc

@@ -26,7 +26,7 @@ import pymupdf
 
 from . import core, store
 from .config import CONFIG
-from .inputs import IMAGE_EXT, is_supported, open_source
+from .inputs import is_supported, open_source
 
 
 def resolve_text(value: str) -> str:
@@ -39,6 +39,19 @@ def resolve_text(value: str) -> str:
     return value.replace("\\n", "\n")
 
 
+def start_arg(value: str) -> str | int:
+    """--start: 1-4, or 'auto'. Anything else is refused: silently clamping 5 to 4 would waste a label."""
+    if value.lower() == "auto":
+        return "auto"
+    try:
+        n = int(value)
+    except ValueError:
+        n = 0
+    if not 1 <= n <= 4:
+        raise argparse.ArgumentTypeError(f"{value!r} isn't a label position: use 1, 2, 3, 4 or auto")
+    return n
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["serve"]:
@@ -48,7 +61,7 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(prog="rmlabels", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*", type=Path)
-    ap.add_argument("--start", default="1", help="first free label on the sheet: 1-4 (TL,TR,BL,BR) or 'auto'")
+    ap.add_argument("--start", default=1, type=start_arg, help="first free label on the sheet: 1-4 (TL,TR,BL,BR) or 'auto'")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--print", action="store_true", help="send straight to the printer at 100%%")
     mode.add_argument("--preview", action="store_true", help="open in Preview (default)")
@@ -76,23 +89,25 @@ def main(argv=None):
                 files.append(f)
         if not files and not texts:
             sys.exit("No label files given.")
-        if a.start == "auto":
-            start = core.read_next_position()
-        else:
-            start = max(1, min(4, int(a.start))) - 1
+        start = core.read_next_position() if a.start == "auto" else a.start - 1
 
         db = store.connect()
-        labels = []
+        labels, readable = [], []
         for f in files:
-            # PDFs go in as paths, exactly as before; images are converted in memory
-            src = open_source(f.name, path=f) if f.suffix.lower() in IMAGE_EXT else f
-            found = list(core.extract_labels([src]))
+            try:
+                # open_source goes by what the file contains, so a PNG saved as .pdf still works
+                found = list(core.extract_labels([open_source(f.name, path=f)]))
+                when = store.last_printed(db, hashlib.sha256(f.read_bytes()).hexdigest())
+            except Exception as e:  # one bad file must not cost the user the good ones
+                print(f"Skipping {f.name}: {e}", file=sys.stderr)
+                continue
+            readable.append(f)
             if not found:
                 print(f"No label found in {f.name} (text-only pages are skipped; use --text for notes).", file=sys.stderr)
             labels += found
-            when = store.last_printed(db, hashlib.sha256(f.read_bytes()).hexdigest())
             if when:
                 print(f"⚠ {f.name} was already printed on {dt.datetime.fromisoformat(when):%a %d %b %H:%M}.")
+        files = readable
         labels += [core.TextLabel(t) for t in texts]
         if not labels:
             sys.exit("Couldn't find any labels in those files.")
