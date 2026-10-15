@@ -44,6 +44,15 @@ def page_items(page: pymupdf.Page):
     """(kind, rect) for every visibly drawn thing, minus full-page backgrounds.
     Text is taken per span (bboxlog text runs can span half the page)."""
     area = page.rect.get_area()
+    overlays = decorative_images(page)
+    other_images = [
+        pymupdf.Rect(info["bbox"])
+        for info in page.get_image_info(xrefs=True)
+        if not any(
+            info.get("xref") == xref and abs(pymupdf.Rect(info["bbox"]) - overlay_rect) < 2
+            for xref, overlay_rect in overlays
+        )
+    ]
     out = []
     for kind, r in page.get_bboxlog():
         r = pymupdf.Rect(r) & page.rect
@@ -51,6 +60,10 @@ def page_items(page: pymupdf.Page):
             continue
         if kind.startswith("fill-path") and r.get_area() > 0.9 * area:
             continue  # white page background
+        if ("image" in kind
+                and any(abs(r - overlay_rect) < 2 for _, overlay_rect in overlays)
+                and not any(abs(r - image_rect) < 2 for image_rect in other_images)):
+            continue  # cut-guide overlay drawn as a page-sized picture
         out.append((kind, r))
     for b in page.get_text("dict")["blocks"]:
         for line in b.get("lines", []):
@@ -90,12 +103,14 @@ def find_frame(page: pymupdf.Page, items):
              and d["rect"].get_area() < 1.6 * content.get_area()]  # not a whole-sheet border
     centre = lambda r: pymupdf.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
     region = content + (-2, -2, 2, 2)
+    overlays = {xref for xref, _ in decorative_images(page)}
     images = []  # (identity, rect) for images belonging to this region
     for n, info in enumerate(page.get_image_info(xrefs=True)):
         r = pymupdf.Rect(info["bbox"])
-        if centre(r) in region:
+        if centre(r) in region and not (info.get("xref") and info["xref"] in overlays):
             images.append((info.get("xref") or ("inline", n), r))  # inline images: each unique
     texts = [r for k, r in items if k == "text"]
+    paths = [r for k, r in items if "path" in k]
     for frame in sorted(boxes, key=lambda r: -r.get_area()):
         loose = frame + (-4, -4, 4, 4)
         inside = {key for key, r in images if centre(r) in loose}
@@ -104,7 +119,83 @@ def find_frame(page: pymupdf.Page, items):
         if texts and sum(centre(r) in loose for r in texts) < 0.85 * len(texts):
             continue
         return frame + (-1.5, -1.5, 1.5, 1.5)  # keep the border line itself
+
+    # Second chance, for labels printed beside/below their own instructions
+    # (Yodel/InPost returns: label box top-left, help text right and below).
+    # Text entirely outside the box is fine then, but only for a label-sized
+    # box that holds every image and nearly all the vector art (the barcode),
+    # with no text straddling its edge — so nothing belonging to it is cut.
+    # (A decorative page-wide box on a document cover is not label-shaped.)
+    for frame in sorted(boxes, key=lambda r: -r.get_area()):
+        short, long = sorted((frame.width, frame.height))
+        if not (60 * MM <= short <= 160 * MM and long <= 220 * MM):  # label-shaped: up to A5-ish
+            continue
+        loose = frame + (-4, -4, 4, 4)
+        if any(r not in loose for _, r in images):  # every image wholly inside, not just its centre
+            continue
+        if not looks_like_label([(k, r) for k, r in items if r in loose]):  # holds a barcode-ish thing
+            continue
+        if not paths or sum(r in loose for r in paths) < 0.8 * len(paths):
+            continue
+        if any(r.intersects(loose) and not r in loose for r in texts):
+            continue
+        return frame + (-1.5, -1.5, 1.5, 1.5)
     return None
+
+
+def decorative_images(page: pymupdf.Page):
+    """(xref, rect) of near-empty pictures covering most of the page.
+
+    Some labels (Yodel) draw their dashed cut guide and scissors as a
+    transparent page-sized image. It isn't content: treating it as such makes
+    the whole A4 page look like one label."""
+    doc = page.parent
+    cache = doc.__dict__.setdefault("_rm_overlays", {})
+    if page.number in cache:
+        return cache[page.number]
+    found = []
+    area = page.rect.get_area()
+    for xref, smask, *_, filt, _ in page.get_images(full=True):
+        if not smask:
+            continue  # sparse opaque labels can also have very little ink
+        if filt in ("DCTDecode", "JPXDecode"):
+            continue  # a photo or scan, never a flat overlay (and slow to decode)
+        for r in page.get_image_rects(xref):
+            r &= page.rect
+            if r.get_area() < 0.6 * area:
+                continue
+            try:
+                if ink_fraction(doc, xref, smask) < 0.005:
+                    found.append((xref, r))
+            except Exception:
+                pass  # unreadable image: leave it counted as content
+    cache[page.number] = found
+    return found
+
+
+DARK = bytes(1 if v < 200 else 0 for v in range(256))  # grey level -> "would show as ink"
+OPAQUE = bytes(1 if v > 20 else 0 for v in range(256))
+
+
+def ink_fraction(doc: pymupdf.Document, xref: int, smask: int = 0) -> float:
+    """Share of an image's pixels that would visibly print (darker than light grey)."""
+    pix = pymupdf.Pixmap(doc, xref)
+    if pix.alpha:
+        pix = pymupdf.Pixmap(pix, 0)
+    gray = pymupdf.Pixmap(pymupdf.csGRAY, pix) if pix.n != 1 else pix
+    dark = gray.samples.translate(DARK).count(1) / (gray.width * gray.height)
+    if smask:  # a soft mask decides what shows: ink needs dark *and* opaque
+        alpha = pymupdf.Pixmap(doc, smask)
+        if alpha.n != 1 or alpha.width != gray.width or alpha.height != gray.height:
+            raise ValueError("soft mask dimensions do not match image")
+        dark_pixels = gray.samples.translate(DARK)
+        opaque_pixels = alpha.samples.translate(OPAQUE)
+        visible_ink = (
+            int.from_bytes(dark_pixels, "little")
+            & int.from_bytes(opaque_pixels, "little")
+        ).bit_count()
+        return visible_ink / (gray.width * gray.height)
+    return dark
 
 
 def looks_like_label(items) -> bool:
