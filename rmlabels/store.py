@@ -180,7 +180,12 @@ def restore(db, item_ids: list[int]) -> int:
             continue
         if it["sha256"] and db.execute("SELECT 1 FROM items WHERE sha256 = ? AND status = 'queued'", (it["sha256"],)).fetchone():
             continue
-        n += db.execute("UPDATE items SET status = 'queued' WHERE id = ? AND status = 'removed'", (i,)).rowcount
+        n += db.execute(
+            "UPDATE items SET status = 'queued' WHERE id = ? AND status = 'removed' "
+            "AND (sha256 IS NULL OR NOT EXISTS (SELECT 1 FROM items queued "
+            "WHERE queued.sha256 = items.sha256 AND queued.status = 'queued'))",
+            (i,),
+        ).rowcount
     db.commit()
     return n
 
@@ -216,7 +221,7 @@ def latest_job(db):
 
 
 def set_job_state(db, job_id: int, state: str):
-    db.execute("UPDATE jobs SET state = ? WHERE id = ?", (state, job_id))
+    db.execute("UPDATE jobs SET state = ? WHERE id = ? AND state != 'undone'", (state, job_id))
     db.commit()
 
 

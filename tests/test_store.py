@@ -69,3 +69,38 @@ def test_connection_can_be_used_from_another_thread(db_path):
     t.join()
     db.close()
     assert seen == [0]
+
+
+def test_restore_rechecks_for_a_queued_duplicate_atomically(db_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "FILES", tmp_path / "files")
+    db, other = store.connect(), store.connect()
+    item_id, _ = store.add_file(db, "label.png", b"same label", "upload")
+    db.execute("UPDATE items SET status = 'removed' WHERE id = ?", (item_id,))
+    db.commit()
+
+    class RacingDB:
+        inserted = False
+
+        def execute(self, sql, args=()):
+            result = db.execute(sql, args)
+            if sql.startswith("SELECT 1 FROM items WHERE sha256 = ?") and not self.inserted:
+                self.inserted = True
+                store.add_file(other, "copy.png", b"same label", "upload")
+            return result
+
+        def commit(self):
+            db.commit()
+
+    assert store.restore(RacingDB(), [item_id]) == 0
+    assert [item["status"] for item in store.queue(other)] == ["queued"]
+    assert store.get_item(other, item_id)["status"] == "removed"
+    db.close()
+    other.close()
+
+
+def test_late_job_state_update_cannot_overwrite_undone(db_path, tmp_path):
+    with store.session() as db:
+        job_id = store.record_job(db, [], tmp_path / "sheet.pdf", 1, 1, 1, True)
+        store.set_job_state(db, job_id, "undone")
+        store.set_job_state(db, job_id, "failed")
+        assert store.get_job(db, job_id)["state"] == "undone"
