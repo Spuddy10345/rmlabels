@@ -1,0 +1,13 @@
+<div class="card job {{ c.state }}" role="status"
+     {% if c.poll %}hx-get="/jobs/{{ c.id }}/status?n={{ c.next }}" hx-trigger="load delay:2s" hx-swap="outerHTML" hx-indicator="#quiet"{% endif %}>
+  <div class="row head">
+    <b class="grow">{{ c.headline }}</b>
+    <small class="muted">{{ c.labels }} label{{ 's' if c.labels != 1 }} · {{ c.when }}</small>
+  </div>
+  {% if c.problem %}<p class="problem">{{ c.problem }}.</p>{% endif %}
+  {% if c.detail %}<p class="muted">{{ c.detail }}</p>{% endif %}
+  {% if c.undo %}
+  <button type="button" class="ghost small" data-arm="Tap again: put {{ c.n_items }} item{{ 's' if c.n_items != 1 }} back in the queue"
+          hx-post="/jobs/{{ c.id }}/undo" hx-trigger="armed" hx-include="#controls" hx-target="#panel" hx-disabled-elt="this">Undo this print</button>
+  {% endif %}
+</div>

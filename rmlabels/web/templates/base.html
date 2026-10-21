@@ -11,19 +11,24 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)">
+  <meta name="htmx-config" content='{"timeout": 60000, "responseHandling": [{"code": "204", "swap": false}, {"code": "[23]..", "swap": true}, {"code": "[45]..", "swap": true, "error": true}]}'>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body hx-indicator="#busy">
+  <a class="skip" href="#main">Skip to the content</a>
+  <div id="busy" class="htmx-indicator" aria-hidden="true"></div>
+  <div id="toast" aria-live="polite"></div>
   <header class="topbar">
     <a class="brand" href="/">📦 Labels</a>
     {% set path = request.url.path %}
     <nav>
-      <a href="/" class="{{ 'on' if path == '/' }}">Queue</a>
-      <a href="/history" class="{{ 'on' if path == '/history' }}">History</a>
+      <a href="/" class="{{ 'on' if path == '/' }}"{% if path == '/' %} aria-current="page"{% endif %}>Queue</a>
+      <a href="/history" class="{{ 'on' if path == '/history' }}"{% if path == '/history' %} aria-current="page"{% endif %}>History</a>
     </nav>
   </header>
-  <main>{% block content %}{% endblock %}</main>
+  <main id="main" tabindex="-1">{% block content %}{% endblock %}</main>
   {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -2,11 +2,13 @@
 {% block title %}History · Labels{% endblock %}
 {% block content %}
 <div class="narrow">
+  <h1 class="sr-only">Print history</h1>
   {% if not jobs %}<p class="muted">Nothing printed yet.</p>{% endif %}
-  {% for job, items, when in jobs %}
+  {% for job, items, when, state in jobs %}
   <form class="card" method="post" action="/history/requeue">
     <div class="row head">
       <b class="grow">{{ when }}</b>
+      <span class="badge {{ 'bad' if state in ('Failed', 'Cancelled', 'Needs attention') }}">{{ state }}</span>
       <span class="muted">{{ job.labels }} label{{ 's' if job.labels != 1 }} · {{ job.sheets }} sheet{{ 's' if job.sheets != 1 }} · from {{ job.start }}{{ ' · black' if job.mono }}</span>
     </div>
     <ul class="queue">
@@ -22,9 +24,13 @@
     </ul>
     <div class="row">
       <a class="button ghost" href="/history/{{ job.id }}/sheet.pdf" target="_blank">Sheet PDF</a>
-      <button type="submit" class="grow">Queue ticked again</button>
+      <button type="button" class="ghost" data-arm="Tap again to forget this print"
+              hx-post="/history/{{ job.id }}/delete" hx-trigger="armed" hx-target="closest form" hx-swap="outerHTML"
+              title="Removes it from this list only; the sheet PDF stays in your sheets folder">Forget</button>
+      <button type="submit" class="grow" title="Adds the ticked labels back to the queue. Nothing prints until you press Print.">Print again</button>
     </div>
   </form>
   {% endfor %}
+  {% if older %}<a class="button ghost" href="/history?before={{ older }}">Older prints</a>{% endif %}
 </div>
 {% endblock %}
