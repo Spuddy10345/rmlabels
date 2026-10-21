@@ -219,9 +219,10 @@ button.armed {
 }
 @media (max-width: 800px) {
   .actions {
-    position: sticky; bottom: 0; z-index: 4;
+    position: fixed; bottom: 0; left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); z-index: 4;
     padding-bottom: calc(14px + env(safe-area-inset-bottom)); box-shadow: 0 -6px 18px rgba(16, 24, 40, .14);
   }
+  .previews { padding-bottom: 180px; }
 }
 @media (max-width: 480px) {
   main { padding-top: 12px; }

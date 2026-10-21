@@ -21,6 +21,12 @@ document.body.addEventListener('htmx:sendError', () =>
   show("Can't reach the server. Check your connection; if you were printing, look at History and the printer before trying again."));
 document.body.addEventListener('htmx:timeout', () =>
   show('The server took too long to answer. If you were printing, look at History and the printer before trying again.'));
+document.body.addEventListener('htmx:beforeSwap', e => {
+  const {xhr} = e.detail;
+  if (xhr.status < 400 || xhr.getResponseHeader('HX-Retarget') || xhr.responseText.includes('hx-swap-oob="true"')) return;
+  e.detail.shouldSwap = false;
+  show('The server returned an error. If you were printing, look at History and the printer before trying again.');
+});
 
 // Successes fade after a few seconds; errors stay until dismissed.
 document.body.addEventListener('htmx:afterSettle', () => {

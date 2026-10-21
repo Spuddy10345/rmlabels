@@ -250,10 +250,10 @@ def used_words(mask: int) -> str:
     return f"label {used[0]}" if len(used) == 1 else "labels " + ", ".join(used[:-1]) + " and " + used[-1]
 
 
-def preview_png(db, mask: int, fill: bool, page_no: int, dpi: int) -> bytes | None:
+def preview_png(db, mask: int, fill: bool, page_no: int, dpi: int, queued=None) -> bytes | None:
     """PNG of one sheet with the label outlines drawn in, and labels already used on a part-used first sheet
     shaded. (Only the preview; never printed.) None if there is no such sheet."""
-    queued = store.queue(db)
+    queued = store.queue(db) if queued is None else queued
     key = (sheet_key(queued, mask, fill), page_no, dpi)
     if key not in _previews:
         out = place_queue(db, mask, fill, queued)[0]
@@ -315,10 +315,11 @@ def recent_job_chip(db) -> dict | None:
         return job_context(db, job)
 
 
-def token(db, queued=None) -> str:
+def token(db, queued=None, mask: int | None = None) -> str:
     """Identifies what Print would act on (the queued items and the saved sheet), so a stale tab can't print something else."""
     ids = ",".join(str(r["id"]) for r in (store.queue(db) if queued is None else queued))
-    return hashlib.sha1(f"{ids}|{core.read_used_mask()}".encode()).hexdigest()[:10]
+    mask = core.read_used_mask() if mask is None else mask
+    return hashlib.sha1(f"{ids}|{mask}".encode()).hexdigest()[:10]
 
 
 def panel(request: Request, mask: int | None = None, fill: bool = False, mono: bool = True,
@@ -492,13 +493,21 @@ def restore(request: Request, ids: str = Form(""), o: dict = Depends(controls_fo
 
 
 @app.get("/preview/{page_no}.png")
-def preview(page_no: int, dpi: int = 50, o: dict = Depends(controls_query), db: sqlite3.Connection = Depends(get_db)):
+def preview(page_no: int, dpi: int = 50, v: str | None = None, o: dict = Depends(controls_query),
+            db: sqlite3.Connection = Depends(get_db)):
     with ENGINE:
-        mask = core.read_used_mask() if o["mask"] is None else o["mask"]
-        png = preview_png(db, mask, o["fill"], page_no, max(30, min(200, dpi)))
+        db.execute("BEGIN")
+        try:
+            queued = store.queue(db)
+            saved = core.read_used_mask()
+            if v and v != token(db, queued, saved):
+                return Response(status_code=409, headers={"Cache-Control": "no-store"})
+            mask = saved if o["mask"] is None else o["mask"]
+            png = preview_png(db, mask, o["fill"], page_no, max(30, min(200, dpi)), queued)
+        finally:
+            db.rollback()
     if png is None:
         raise StarletteHTTPException(404)
-    # the URL carries the queue version, so a changed queue is a new URL and this can be kept
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
 

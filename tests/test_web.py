@@ -473,6 +473,19 @@ def test_preview_images_are_pngs_with_a_cache_header(client):
     assert first != r.content                            # start moves the 'used' shading, so the picture differs
 
 
+def test_stale_preview_version_is_rejected_without_caching(client):
+    import re
+    client.post("/text", data={"text": "FRAGILE"})
+    old_version = re.search(r'name="v" value="([^"]+)"', client.get("/panel").text).group(1)
+    client.post("/text", data={"text": "HANDLE WITH CARE"})
+
+    stale = client.get("/preview/0.png", params={"used_set": "1", "v": old_version})
+    assert stale.status_code == 409 and stale.headers["cache-control"] == "no-store"
+    new_version = re.search(r'name="v" value="([^"]+)"', client.get("/panel").text).group(1)
+    current = client.get("/preview/0.png", params={"used_set": "1", "v": new_version})
+    assert current.status_code == 200 and "max-age" in current.headers["cache-control"]
+
+
 def test_saving_a_cached_sheet_does_not_disturb_it(client):
     client.post("/text", data={"text": "FRAGILE"})
     with web.ENGINE, store.session() as db:
@@ -555,15 +568,23 @@ def test_logging_rotates_and_is_not_duplicated(tmp_path):
     from rmlabels import cli
     path = tmp_path / "logs" / "rmlabels.log"
     cli.setup_logging(path)
+    first_file = next(h for h in logging.getLogger("rmlabels").handlers
+                      if isinstance(h, logging.handlers.RotatingFileHandler))
     cli.setup_logging(path)                               # a second call must not double every line
+    assert first_file.stream is None
     logging.getLogger("rmlabels.web").info("print: 1 label(s) cups job 7")
+    logging.getLogger("uvicorn.error").info("server started")
     logging.getLogger("rmlabels.web").debug("noise")
-    for h in logging.getLogger("rmlabels").handlers:
+    for h in set(logging.getLogger("rmlabels").handlers + logging.getLogger("uvicorn.error").handlers):
         h.flush()
     lines = path.read_text().splitlines()
-    assert len(lines) == 1 and "cups job 7" in lines[0] and "INFO rmlabels.web" in lines[0]
+    assert len(lines) == 2 and "cups job 7" in lines[0] and "INFO rmlabels.web" in lines[0]
+    assert "INFO uvicorn.error" in lines[1]
     rotating = [h for h in logging.getLogger("rmlabels").handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
-    assert len(rotating) == 1 and rotating[0].maxBytes == 1_000_000 and rotating[0].backupCount == 3
+    uvicorn_file = [h for h in logging.getLogger("uvicorn.error").handlers
+                    if isinstance(h, logging.handlers.RotatingFileHandler)]
+    assert len(rotating) == len(uvicorn_file) == 1 and rotating[0] is uvicorn_file[0]
+    assert rotating[0].maxBytes == 1_000_000 and rotating[0].backupCount == 3
     for name in ("rmlabels", "uvicorn.error"):            # leave global logging as we found it
         for h in [h for h in logging.getLogger(name).handlers if getattr(h, "_rmlabels", False)]:
             logging.getLogger(name).removeHandler(h)
@@ -760,6 +781,17 @@ def test_undo_never_duplicates_or_resurrects_printed_items(client):
 def test_undo_toast_stays_longer_than_a_plain_one(client):
     js = (web.HERE / "static" / "app.js").read_text()
     assert "15000" in js and "[hx-post]" in js
+
+
+def test_htmx_server_errors_preserve_app_fragments_but_reject_other_bodies(client):
+    js = (web.HERE / "static" / "app.js").read_text()
+    assert "htmx:beforeSwap" in js and "HX-Retarget" in js and "hx-swap-oob=\"true\"" in js
+    assert "e.detail.shouldSwap = false" in js
+
+
+def test_mobile_print_action_stays_visible_below_previews(client):
+    css = (web.HERE / "static" / "app.css").read_text()
+    assert "position: fixed; bottom: 0" in css and ".previews { padding-bottom: 180px; }" in css
 
 
 def jobs_in_history(html):

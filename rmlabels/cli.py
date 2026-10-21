@@ -158,12 +158,17 @@ def setup_logging(path: Path):
     uvicorn must be started with log_config=None: its default configuration strips handlers off its own loggers."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    for name in ("rmlabels", "uvicorn.error"):
-        logger = logging.getLogger(name)
-        for h in [h for h in logger.handlers if getattr(h, "_rmlabels", False)]:
-            logger.removeHandler(h)  # called twice (tests, reloads) must not duplicate lines
-        file = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-        file.setFormatter(fmt)
+    loggers = [logging.getLogger(name) for name in ("rmlabels", "uvicorn.error")]
+    old = {h for logger in loggers for h in logger.handlers if getattr(h, "_rmlabels", False)}
+    for logger in loggers:
+        for h in old:
+            logger.removeHandler(h)
+    for h in old:
+        h.close()
+    file = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    file.setFormatter(fmt)
+    file._rmlabels = True
+    for logger in loggers:
         stderr = logging.StreamHandler()
         stderr.setFormatter(fmt)
         for h in (file, stderr):
