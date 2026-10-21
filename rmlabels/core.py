@@ -9,8 +9,11 @@ sharp.
 """
 from __future__ import annotations
 
+import functools
 import html
+import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +28,8 @@ PITCH_X, PITCH_Y = 101.6, 139.0  # label-to-label distance (2.5 mm column gap)
 PAD = 3.0                    # keep print this far inside each label edge
 NUDGE_X, NUDGE_Y = float(CONFIG["nudge_x"]), float(CONFIG["nudge_y"])  # printer calibration (+ = right / down)
 
-STATE = DATA_DIR / "next_position"
+STATE = DATA_DIR / "next_position"  # first free label (older form, still written)
+USED = DATA_DIR / "used_mask"          # which of the 4 labels are used, e.g. 5 = labels 1 and 3
 
 MM = 72 / 25.4
 A4 = pymupdf.paper_rect("a4")
@@ -339,18 +343,28 @@ class TextLabel:
 TEXT_SIZES = (72, 60, 48, 40, 34, 28, 24, 20, 17, 14, 12)
 
 
-def draw_text_label(page: pymupdf.Page, cell: pymupdf.Rect, text: str):
-    """Write `text` into the cell at the largest font size that fits, centred
-    vertically. Short notes are centred; longer messages are left-aligned."""
+def text_layout(text: str) -> tuple[list[str], str, str]:
+    """(lines, alignment, html body) for a text label."""
     lines = text.strip().splitlines() or [""]
     align = "center" if len(lines) <= 4 and max(map(len, lines)) <= 28 else "left"
-    body = "<br>".join(html.escape(line) or "&nbsp;" for line in lines)
-    css_for = lambda size: f"* {{font-family: sans-serif; font-size: {size}pt; line-height: 1.2; text-align: {align}}}"
+    return lines, align, "<br>".join(html.escape(line) or "&nbsp;" for line in lines)
+
+
+def text_css(size: int, align: str) -> str:
+    return f"* {{font-family: sans-serif; font-size: {size}pt; line-height: 1.2; text-align: {align}}}"
+
+
+@functools.lru_cache(maxsize=256)
+def fit_text(text: str, cell: tuple[float, float, float, float]) -> tuple[int, float]:
+    """(font size, spare height) for the largest size at which `text` fits the cell. It takes a dozen scratch
+    renders to find, and the answer depends only on the text and the cell, so it is remembered."""
+    lines, align, body = text_layout(text)
+    rect = pymupdf.Rect(cell)
 
     def trial(size, scale_low=1):
         """(spare height, rendered line count) for this size on a scratch page."""
         scratch = pymupdf.open().new_page(width=A4.width, height=A4.height)
-        spare, _ = scratch.insert_htmlbox(cell, body, css=css_for(size), scale_low=scale_low)
+        spare, _ = scratch.insert_htmlbox(rect, body, css=text_css(size, align), scale_low=scale_low)
         rows = {round(l["bbox"][1]) for b in scratch.get_text("dict")["blocks"] for l in b.get("lines", [])}
         return spare, len(rows)
 
@@ -364,17 +378,30 @@ def draw_text_label(page: pymupdf.Page, cell: pymupdf.Rect, text: str):
     else:  # too long even at the smallest size: shrink to fit
         size = TEXT_SIZES[-1]
         spare, _ = trial(size, scale_low=0)
+    return size, spare
+
+
+def draw_text_label(page: pymupdf.Page, cell: pymupdf.Rect, text: str):
+    """Write `text` into the cell at the largest font size that fits, centred
+    vertically. Short notes are centred; longer messages are left-aligned."""
+    _, align, body = text_layout(text)
+    size, spare = fit_text(text, tuple(cell))
     box = pymupdf.Rect(cell.x0, cell.y0 + max(spare, 0) / 2, cell.x1, cell.y1)
-    page.insert_htmlbox(box, body, css=css_for(size), scale_low=0)
+    page.insert_htmlbox(box, body, css=text_css(size, align), scale_low=0)
 
 
 # ── Imposition ────────────────────────────────────────────────────────────────
-def place(out: pymupdf.Document, labels, start: int, fill: bool, log=print) -> int:
-    pos, page = start, None
+def place(out: pymupdf.Document, labels, start: int, fill: bool, log=print, skip=()) -> int:
+    """Lay labels out from slot `start` of the first sheet, leaving the slots in `skip` (already peeled) empty
+    on that sheet only. Returns the slot after the last label."""
+    skipped, pos, page = set(skip), start, None
     for label in labels:
-        if page is None or pos == 4:
+        while pos in skipped:
+            pos += 1
+        if pos >= 4:  # this sheet is full (or had no free slot): carry on with a fresh one
+            page, pos, skipped = None, 0, set()
+        if page is None:
             page = out.new_page(width=A4.width, height=A4.height)
-            pos %= 4  # first sheet keeps `start`; later sheets begin at label 1
         cell = cell_rect(pos)
         if isinstance(label, TextLabel):
             draw_text_label(page, cell, label.text)
@@ -417,7 +444,12 @@ def save_sheet(out: pymupdf.Document, dest: Path) -> Path:
     return dest
 
 
-def print_sheet(dest: Path, mono: bool = False, draft: bool = False, printer: str | None = None):
+PRINT_TIMEOUT = 20  # seconds for `lp` to hand the job to CUPS (not for the print itself)
+
+
+def print_sheet(dest: Path, mono: bool = False, draft: bool = False, printer: str | None = None) -> int | None:
+    """Hand the sheet to CUPS. Returns the CUPS job number (None if `lp` didn't say), or raises RuntimeError
+    with the reason. Success only means CUPS accepted the job; job_status() says what happened next."""
     opts = ["PageSize=A4", "print-scaling=none", "EPIJ_Bdls=0", "EPIJ_Medi=0"]
     if not draft:
         # Plain paper + Fine: 720 dpi, one-way head passes -> crisp barcodes and solid text
@@ -427,17 +459,159 @@ def print_sheet(dest: Path, mono: bool = False, draft: bool = False, printer: st
     cmd = ["lp", "-d", printer or CONFIG["printer"]]
     for o in opts:
         cmd += ["-o", o]
-    subprocess.run(cmd + [str(dest)], check=True)
-
-
-def read_next_position() -> int:
-    """0-based next free label on the last part-used sheet (0 = fresh sheet)."""
     try:
-        return int(STATE.read_text()) % 4
+        r = subprocess.run(cmd + [str(dest)], capture_output=True, text=True, timeout=PRINT_TIMEOUT)
+    except FileNotFoundError:
+        raise RuntimeError("`lp` wasn't found, so there is no way to print from here.") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"CUPS didn't answer within {PRINT_TIMEOUT} seconds. The job may still have been queued, "
+                           "so check the printer queue before printing again.") from None
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip() or f"lp exited with status {r.returncode}.")
+    m = re.search(r"request id is \S+-(\d+)", r.stdout)
+    return int(m.group(1)) if m else None
+
+
+# CUPS job-state (IPP) → what the UI shows. Only "completed" means the spooler is finished, which for
+# a network printer is not quite the same as paper in the tray, so the UI words it carefully.
+JOB_STATES = {"pending": "queued", "pending-held": "held", "processing": "printing", "processing-stopped": "stopped",
+              "canceled": "cancelled", "aborted": "failed", "completed": "done"}
+FINAL_STATES = {"done", "failed", "cancelled"}
+PRINTER_PROBLEMS = {"media-empty": "Out of paper", "media-needed": "Out of paper", "media-jam": "Paper jam",
+                    "marker-supply-empty": "A cartridge is empty", "marker-supply-low": "A cartridge is low",
+                    "offline": "The printer is offline", "paused": "The printer is paused",
+                    "door-open": "The printer cover is open", "cover-open": "The printer cover is open",
+                    "input-tray-missing": "The paper tray is missing", "shutdown": "The printer is shutting down"}
+
+
+def _problems(reasons: str) -> list[str]:
+    """Plain-English problems from a comma-separated IPP *-state-reasons value."""
+    found = []
+    for reason in reasons.split(","):
+        said = PRINTER_PROBLEMS.get(re.sub(r"-(error|warning|report)$", "", reason.strip()))
+        if said and said not in found:
+            found.append(said)
+    return found
+
+
+def parse_printer_status(text: str) -> tuple[str, str]:
+    """(state, problem) from `ipptool -tv … get-printer-attributes.test` output. state: ready | busy | stopped | unknown."""
+    m = re.search(r"^\s*printer-state \(enum\) = (\S+)", text, re.M)
+    state = {"idle": "ready", "processing": "busy", "stopped": "stopped"}.get(m.group(1), "unknown") if m else "unknown"
+    if state == "unknown":
+        return state, ""
+    m = re.search(r"^\s*printer-state-reasons \([^)]*\) = (.+)$", text, re.M)
+    problems = _problems(m.group(1)) if m else []
+    if re.search(r"^\s*printer-is-accepting-jobs \(boolean\) = false", text, re.M):
+        problems.append("The printer isn't accepting jobs")
+    if state == "stopped" and not problems:
+        problems.append("The print queue is stopped")
+    return state, "; ".join(problems)
+
+
+def printer_status(printer: str | None = None) -> tuple[str, str]:
+    """Ask CUPS about the printer itself, so problems show up before a print rather than after. Never raises."""
+    out = _ipptool(f"ipp://localhost/printers/{printer or CONFIG['printer']}", "get-printer-attributes.test")
+    return ("unknown", "") if out is None else parse_printer_status(out)
+
+
+def parse_job_status(text: str) -> tuple[str, str]:
+    """(state, problem) from `ipptool -tv … get-job-attributes.test` output; state is "unknown" if unreadable."""
+    m = re.search(r"^\s*job-state \(enum\) = (\S+)", text, re.M)
+    state = JOB_STATES.get(m.group(1), "unknown") if m else "unknown"
+    m = re.search(r"^\s*job-printer-state-reasons \([^)]*\) = (.+)$", text, re.M)
+    return state, "; ".join(_problems(m.group(1)) if m else [])
+
+
+def _ipptool(uri: str, test: str) -> str | None:
+    """Output of an ipptool query, or None if CUPS couldn't be asked. macOS starts cupsd on demand and it can
+    refuse the very first connection while it wakes up ("Operation now in progress"), so connecting gets one retry."""
+    for attempt in range(2):
+        try:
+            r = subprocess.run(["ipptool", "-tv", uri, test], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if "Unable to connect" not in r.stderr:
+            return r.stdout
+        if attempt == 0:
+            time.sleep(0.7)
+    return None
+
+
+def job_status(job_id: int) -> tuple[str, str]:
+    """Ask CUPS how a job is getting on. Never raises: if CUPS or ipptool can't be reached the answer is
+    "unknown", which callers must not treat as a failure (the connection can hiccup while the job is fine)."""
+    out = _ipptool(f"ipp://localhost/jobs/{job_id}", "get-job-attributes.test")
+    return _lpstat_status(job_id) if out is None else parse_job_status(out)
+
+
+def _lpstat_status(job_id: int) -> tuple[str, str]:
+    """Fallback when ipptool is missing: only tells waiting/printing apart from finished."""
+    try:
+        for flag, state in (("not-completed", "printing"), ("completed", "done")):
+            out = subprocess.run(["lpstat", "-W", flag, "-o"], capture_output=True, text=True, timeout=5).stdout
+            if re.search(rf"-{job_id}\s", out):
+                return state, ""
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "unknown", ""
+
+
+FULL = 0b1111  # all four slots used
+
+
+def mask_from_start(start: int) -> int:
+    """Slots before `start` are used: starting at label 3 means labels 1 and 2 are gone."""
+    return (1 << max(0, min(4, start))) - 1
+
+
+def free_slots(mask: int) -> list[int]:
+    return [i for i in range(4) if not mask >> i & 1]
+
+
+def used_after(mask: int, n: int) -> int:
+    """The sheet left in the printer after n labels go into its free slots (and onto fresh sheets after that).
+    A sheet with nothing left on it counts as a fresh one, so the answer is 0 rather than FULL."""
+    free = free_slots(mask)
+    if n <= 0:
+        return mask
+    if n <= len(free):
+        mask |= sum(1 << i for i in free[:n])
+    else:
+        mask = mask_from_start((n - len(free)) % 4)
+    return 0 if mask == FULL else mask
+
+
+def _write_atomic(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)  # a crash can't leave a half-written file that reads as "fresh sheet"
+
+
+def read_used_mask() -> int:
+    """Which labels on the sheet in the printer are used (bit n = label n+1). Falls back to the older
+    single 'next free label' number if there is no mask yet."""
+    try:
+        return int(USED.read_text()) & FULL
+    except (OSError, ValueError):
+        pass
+    try:
+        return mask_from_start(int(STATE.read_text()) % 4)
     except (OSError, ValueError):
         return 0
 
 
+def write_used_mask(mask: int):
+    mask = 0 if mask & FULL == FULL else mask & FULL
+    _write_atomic(USED, str(mask))
+    _write_atomic(STATE, str((free_slots(mask) or [0])[0]))  # the older single-number form, for anything still reading it
+
+
+def read_next_position() -> int:
+    """0-based first free label on the sheet in the printer (0 = fresh sheet)."""
+    return (free_slots(read_used_mask()) or [0])[0]
+
+
 def write_next_position(end: int):
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(str(end % 4))
+    write_used_mask(mask_from_start(end % 4))

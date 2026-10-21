@@ -18,6 +18,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import logging
+import logging.handlers
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +27,7 @@ from pathlib import Path
 import pymupdf
 
 from . import core, store
-from .config import CONFIG
+from .config import CONFIG, DATA_DIR
 from .inputs import is_supported, open_source
 
 
@@ -89,7 +91,7 @@ def main(argv=None):
                 files.append(f)
         if not files and not texts:
             sys.exit("No label files given.")
-        start = core.read_next_position() if a.start == "auto" else a.start - 1
+        mask = core.read_used_mask() if a.start == "auto" else core.mask_from_start(a.start - 1)
 
         db = store.connect()
         labels, readable = [], []
@@ -111,12 +113,13 @@ def main(argv=None):
         labels += [core.TextLabel(t) for t in texts]
         if not labels:
             sys.exit("Couldn't find any labels in those files.")
-        if a.start == "auto" and start:
-            used = "label 1 is" if start == 1 else f"labels 1-{start} are"
-            print(f"Continuing a part-used sheet: {used} treated as already used.")
+        free = core.free_slots(mask)
+        first = (free or [0])[0]
+        if a.start == "auto" and mask:
+            print(f"Continuing a part-used sheet: {describe_used(mask)} treated as already used.")
             print("Load that sheet, or choose 'New sheet' if you put in a fresh one.")
-        print(f"{len(labels)} label(s) from {len(files)} file(s), starting at position {start + 1}:")
-        end = core.place(out, labels, start, a.fill)
+        print(f"{len(labels)} label(s) from {len(files)} file(s), starting at position {first + 1}:")
+        core.place(out, labels, 0, a.fill, skip={i for i in range(4) if mask >> i & 1})
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = CONFIG["out_dir"] / (f"rm-labels-grid.pdf" if a.grid else f"rm-labels-{stamp}.pdf")
@@ -124,16 +127,49 @@ def main(argv=None):
     print(f"→ {dest}")
 
     if a.print:
-        core.print_sheet(dest, mono=a.mono, draft=a.draft)
+        try:
+            job = core.print_sheet(dest, mono=a.mono, draft=a.draft)
+        except RuntimeError as e:
+            sys.exit(f"Printing failed: {e}")
         if not a.grid:
-            core.write_next_position(end)
+            after = core.used_after(mask, len(labels))
+            core.write_used_mask(after)
             ids = [store.add_file(db, f.name, f.read_bytes(), "cli")[0] for f in files]
             ids += [store.add_text(db, t, "cli") for t in texts]
-            store.record_job(db, ids, dest, start + 1, len(labels), len(out), a.mono)
-            print(f"Printed. Next free label on the last sheet: {end % 4 + 1 if end % 4 else 'none (sheet full)'}")
+            store.record_job(db, ids, dest, first + 1, len(labels), len(out), a.mono, cups_job=job, used_before=mask)
+            print(f"Printed. Next free label on the last sheet: {core.free_slots(after)[0] + 1 if after else 'none (sheet full)'}")
     else:
         # Preview never uses up labels: only a real print moves the saved position on
         subprocess.run(["open", "-a", "Preview", str(dest)])
+
+
+def describe_used(mask: int) -> str:
+    """'label 1 is', 'labels 1-3 are', 'labels 1 and 3 are'."""
+    used = [i + 1 for i in range(4) if mask >> i & 1]
+    if len(used) == 1:
+        return f"label {used[0]} is"
+    if used == list(range(1, len(used) + 1)):
+        return f"labels 1-{len(used)} are"
+    return "labels " + ", ".join(map(str, used[:-1])) + f" and {used[-1]} are"
+
+
+def setup_logging(path: Path):
+    """Keep our own log (rotated, so it can't grow forever) and still copy it to stderr for launchd's log.
+    uvicorn must be started with log_config=None: its default configuration strips handlers off its own loggers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for name in ("rmlabels", "uvicorn.error"):
+        logger = logging.getLogger(name)
+        for h in [h for h in logger.handlers if getattr(h, "_rmlabels", False)]:
+            logger.removeHandler(h)  # called twice (tests, reloads) must not duplicate lines
+        file = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        file.setFormatter(fmt)
+        stderr = logging.StreamHandler()
+        stderr.setFormatter(fmt)
+        for h in (file, stderr):
+            h._rmlabels = True
+            logger.addHandler(h)
+        logger.setLevel(logging.INFO)
 
 
 def serve(argv):
@@ -142,7 +178,9 @@ def serve(argv):
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args(argv)
     import uvicorn
-    uvicorn.run("rmlabels.web:app", host=a.host, port=a.port)
+    setup_logging(DATA_DIR / "rmlabels.log")
+    # access_log off: the page polls, so it would log thousands of lines a day. log_config=None: keep our handlers.
+    uvicorn.run("rmlabels.web:app", host=a.host, port=a.port, access_log=False, log_config=None)
 
 
 def fetch_mail():
