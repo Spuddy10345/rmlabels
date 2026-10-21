@@ -16,8 +16,9 @@ use it from the command line, from Raycast, or from a small web UI that also wor
 uv tool install --force -e ~/code/rmlabels     # puts `rmlabels` in ~/.local/bin
 ```
 
-Settings go in `~/.config/rmlabels/config.toml`: printer, alignment nudge, text presets and mail.
-Every key is optional. The queue, print history and saved position live in `~/.local/share/rmlabels/`.
+Settings go in `~/.config/rmlabels/config.toml`: printer, alignment nudge, text presets, mail, and the
+web UI's `allowed_hosts` and `api_token`. Every key is optional. The queue, print history and which
+labels on the sheet are used live in `~/.local/share/rmlabels/`.
 
 ## Command line
 
@@ -30,8 +31,8 @@ rmlabels fetch-mail                      # pull label attachments from email int
 
 | Flag | What it does |
 |---|---|
-| `--start N` | Where the first label goes, `1`–`4` (default `1`) |
-| `--start auto` | Starts at the next free spot on your last part-used sheet |
+| `--start N` | Where the first label goes, `1`–`4` (default `1`); labels before it count as used |
+| `--start auto` | Uses the saved sheet: fills the free labels on your last part-used sheet, gaps included |
 | `--preview` | Opens the result in Preview. This is the default and uses up nothing. |
 | `--print` | Prints at 100% (Fine, 720 dpi) and records the job in history |
 | `--mono` | Black cartridge only. Raycast and the web UI default to this; the CLI doesn't. |
@@ -57,7 +58,8 @@ rmlabels --text "Please leave with\nnumber 12"      # preview a note
 
 **Output and state**
 - Each run saves `~/Downloads/rm-labels-<date>-<time>.pdf`.
-- A real print updates the saved next free spot (`next_position`) and adds the job to history.
+- A real print updates which labels on the sheet are used (`used_mask`, with `next_position` kept
+  alongside for older tools) and adds the job to history.
 - Printing a file that has been printed before gives a warning.
 
 ## Web UI
@@ -66,14 +68,35 @@ The LaunchAgent `com.finjo.rmlabels-web` runs it at http://127.0.0.1:8765.
 `tailscale serve --bg --https=8765 http://127.0.0.1:8765` makes it available at
 **https://<your-mac>.<your-tailnet>.ts.net:8765**, from the tailnet only.
 
-- Drop files, paste a screenshot (⌘V) or tap to choose. Add text labels, with preset buttons.
-- Pick the start spot on the mini sheet (it defaults to the saved position). The preview shades
-  the spots already used.
+- Drop files, paste a screenshot (⌘V, even while typing in the text box) or tap to choose. Add text
+  labels, with preset buttons that leave whatever you've typed alone.
+- **The sheet in the printer:** tap any label you've already peeled off, in any order. It shows
+  which spots *will print*, and the preview shades the used ones. *Save this as the sheet in the
+  printer* remembers it (after a jam, or when you load a different sheet).
 - Each queued file shows a thumbnail. Badges show *no label found*, *N labels* and
-  *printed before* (duplicate).
-- **Print** asks for confirmation first. **History** lets you requeue any past labels, or reopen
-  the sheet PDF.
+  *printed before* (duplicate). Click a sheet preview to enlarge it.
+- **Print and Clear are two taps:** the first tap shows exactly what will happen ("Tap again to
+  print 3 labels on 2 sheets…"), the second sends it. They never use the browser's own confirm
+  box, which browsers can silently block.
+- **After Print** a status line follows the job in CUPS: *Sent*, *Printing…*, *Finished spooling*,
+  or *The print failed* with the printer's reason (out of paper, jam…) and **Undo this print**.
+  "Finished spooling" means CUPS is done, not that paper is in the tray.
+- **Safety:** if the queue changed since you looked (phone upload, email, another tab) Print refuses
+  and shows you the new queue. Open tabs refresh themselves within about 15 seconds. Two taps
+  or two devices can never print the same sheet twice.
+- **Undo** appears after removing an item or Clearing the queue. **History** shows how each print
+  went, pages through older ones, reopens the sheet PDF, puts labels back in the queue (*Print
+  again*) or forgets a print.
+- A printer line shows problems before you print, and *Print test grid* is the alignment sheet.
+- Your ink and quality choices are remembered across devices.
+- Failed requests, a lost connection or a timeout show a message at the top of the page instead of doing nothing.
 - On iPhone: Safari → Share → *Add to Home Screen*.
+
+**Security.** The app only answers to `localhost`, `127.0.0.1` and `*.ts.net` names (add others with
+`allowed_hosts = ["labels.home"]`), refuses cross-site POSTs, and limits uploads to 25 MB per file.
+Anyone on your tailnet can use it. To require a token from the phone Shortcut, set
+`api_token = "…"` in the config and add the header `Authorization: Bearer …` to its request.
+Logs: `~/.local/share/rmlabels/rmlabels.log` (rotated) and `~/Library/Logs/rmlabels/web.log`.
 
 ### iPhone share-sheet Shortcut
 
@@ -113,6 +136,14 @@ moves right and down.
 ```sh
 uv run pytest
 ```
+
+The web UI is htmx 2.0.x, vendored in `rmlabels/web/static/` (htmx 4 renames events and changes
+error handling, so it is a separate upgrade). Try changes without touching the live service by
+running `RMLABELS_DATA=/tmp/rm RMLABELS_CONFIG=/tmp/rm.toml rmlabels serve --port 8766`, and put a stub
+`lp` first on `PATH` so nothing really prints.
+
+The database upgrades itself on start (`MIGRATIONS` in `store.py`) and uses WAL, so there are
+`rmlabels.db-wal` and `-shm` files next to it: copy all three, or use `sqlite3 rmlabels.db .backup`.
 
 `tests/fixtures/private/` is gitignored and holds real labels, which contain addresses. Tests that
 need a fixture that isn't there are skipped. `tests/test_regression.py` checks that the engine
