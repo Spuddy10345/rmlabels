@@ -323,10 +323,17 @@ def token(db, queued=None) -> str:
 
 def panel(request: Request, mask: int | None = None, fill: bool = False, mono: bool = True,
           draft: bool = False, message: str | None = None, error: bool = False, status: int = 200,
-          chip: dict | None = None, undo: list[int] | None = None):
-    """The queue, the sheet map and the preview. `mask` is which labels are used; None means the saved sheet."""
+          chip: dict | None = None, undo: list[int] | None = None, base: int | None = None):
+    """The queue, the sheet map and the preview. `mask` is which labels are used; None means the saved sheet.
+    `base` is the saved sheet the page's map was built from: if the saved sheet has moved on since (another tab
+    or the CLI printed), the page's map is replaced with the saved one, so a stale map can't be printed."""
     with ENGINE, store.session() as db:
         saved = core.read_used_mask()
+        if base is not None and base != saved:
+            if mask is not None and mask != base:
+                note = "The sheet in the printer changed elsewhere, so your label ticks were reset. Check the sheet below."
+                message, error = (f"{message} {note}" if message else note), True
+            mask = saved
         mask = saved if mask is None else mask
         queued = store.queue(db)
         out, rows, ids, n = build(db, mask, fill, queued)
@@ -337,14 +344,14 @@ def panel(request: Request, mask: int | None = None, fill: bool = False, mono: b
         return templates.TemplateResponse(request, "_panel.html", {
             "rows": rows, "n_labels": n, "n_sheets": len(out), "slots": slots, "fill": fill, "mono": mono, "draft": draft,
             "first": (free or [0])[0] + 1, "next_free": (core.free_slots(after) or [0])[0] + 1 if n and after else None,
-            "mask": mask, "saved_mask": saved, "saved_text": f"{used_words(saved)} used" if saved else "fresh sheet",
+            "mask": mask, "saved_mask": saved, "base": saved, "saved_text": f"{used_words(saved)} used" if saved else "fresh sheet",
             "used_qs": "used_set=1" + "".join(f"&used={i + 1}" for i in sorted(used_slots(mask))),
             "sheets": len(out) if n else 0, "message": message, "error": error,
             "version": token(db, queued), "chip": chip, "undo": ",".join(map(str, undo or [])),
         }, status_code=status)
 
 
-def opts(start: str | None, fill, mono, draft, used=(), used_set: str | None = None):
+def opts(start: str | None, fill, mono, draft, used=(), used_set: str | None = None, base: str | None = None):
     """The controls form (or query string) → panel() keyword arguments. `mask` stays None unless the page said
     which labels are used, either as ticked slots or as the older 'start at label N'."""
     mask = None
@@ -357,17 +364,20 @@ def opts(start: str | None, fill, mono, draft, used=(), used_set: str | None = N
             pass
     if mask == core.FULL:  # every label used = a spent sheet = the next one is fresh (as when a print fills a sheet)
         mask = 0
-    return {"mask": mask, "fill": bool(fill), "mono": bool(mono), "draft": bool(draft)}
+    base_mask = int(base) & core.FULL if base and base.isdigit() else None
+    return {"mask": mask, "fill": bool(fill), "mono": bool(mono), "draft": bool(draft), "base": base_mask}
 
 
 def controls_form(start: str | None = Form(None), fill: str | None = Form(None), mono: str | None = Form(None),
-                  draft: str | None = Form(None), used: list[str] = Form([]), used_set: str | None = Form(None)) -> dict:
-    return opts(start, fill, mono, draft, used, used_set)
+                  draft: str | None = Form(None), used: list[str] = Form([]), used_set: str | None = Form(None),
+                  base: str | None = Form(None)) -> dict:
+    return opts(start, fill, mono, draft, used, used_set, base)
 
 
 def controls_query(start: str | None = None, fill: str | None = None, mono: str | None = None,
-                   draft: str | None = None, used: list[str] = Query([]), used_set: str | None = None) -> dict:
-    return opts(start, fill, mono, draft, used, used_set)
+                   draft: str | None = None, used: list[str] = Query([]), used_set: str | None = None,
+                   base: str | None = None) -> dict:
+    return opts(start, fill, mono, draft, used, used_set, base)
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -509,7 +519,7 @@ def print_queue(request: Request, v: str | None = Form(None), o: dict = Depends(
                 db: sqlite3.Connection = Depends(get_db)):
     with PRINT_LOCK:  # nothing else may print, or change the saved sheet, between the check below and the record
         with ENGINE:  # pymupdf: place the sheet and save it. Released before CUPS, which can be slow
-            if v and v != token(db):
+            if (v and v != token(db)) or (o["base"] is not None and o["base"] != core.read_used_mask()):
                 return panel(request, **o, status=409, error=True,
                              message="The queue changed since you looked, so nothing was printed. Check the sheet below, then print again.")
             mask = core.read_used_mask() if o["mask"] is None else o["mask"]

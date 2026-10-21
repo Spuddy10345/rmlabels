@@ -226,6 +226,18 @@ def test_stale_tab_cannot_print_a_different_queue(client):
     assert client.post("/print", data={"start": "1", "v": fresh}).status_code == 409 and len(client.printed) == 1
 
 
+def test_stale_sheet_map_cannot_print_after_another_tab_used_a_slot(client):
+    client.post("/text", data={"text": "FRAGILE"})
+    base = core.read_used_mask()                            # tab B loaded the sheet with every slot free
+    core.write_used_mask(0b1)                               # tab A printed into slot 1
+    client.post("/text", data={"text": "ANOTHER"})          # B's poll then refreshes its token
+    v = web.token(store.connect())
+    r = client.post("/print", data={"used_set": "1", "base": str(base), "v": v})
+    assert r.status_code == 409 and not client.printed
+    r = client.get("/panel", params={"used_set": "1", "base": str(base), "v": v})
+    assert 'name="base" value="1"' in r.text                # the poll reconciles to the saved sheet
+
+
 def test_double_submit_prints_once(client):
     client.post("/text", data={"text": "FRAGILE"})
     v = web.token(store.connect())

@@ -3,6 +3,7 @@
 
 <form id="controls" class="card" hx-get="/panel" hx-trigger="change" hx-target="#panel" hx-sync="this:replace">
   <input type="hidden" name="v" value="{{ version }}">
+  <input type="hidden" name="base" value="{{ base }}">
   <div class="controls">
     <fieldset class="picker">
       <legend>Labels on the sheet in the printer</legend>

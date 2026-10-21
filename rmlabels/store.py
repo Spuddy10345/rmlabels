@@ -165,9 +165,9 @@ def clear(db) -> list[int]:
 
 def _take_out(db, where: str, args: tuple) -> list[int]:
     ids = [r[0] for r in db.execute(f"SELECT id FROM items WHERE status = 'queued' AND {where}", args)]
-    db.executemany("UPDATE items SET status = 'removed' WHERE id = ?", [(i,) for i in ids])
+    done = [i for i in ids if db.execute("UPDATE items SET status = 'removed' WHERE id = ? AND status = 'queued'", (i,)).rowcount]
     db.commit()
-    return ids
+    return done
 
 
 def restore(db, item_ids: list[int]) -> int:
@@ -180,8 +180,7 @@ def restore(db, item_ids: list[int]) -> int:
             continue
         if it["sha256"] and db.execute("SELECT 1 FROM items WHERE sha256 = ? AND status = 'queued'", (it["sha256"],)).fetchone():
             continue
-        db.execute("UPDATE items SET status = 'queued' WHERE id = ?", (i,))
-        n += 1
+        n += db.execute("UPDATE items SET status = 'queued' WHERE id = ? AND status = 'removed'", (i,)).rowcount
     db.commit()
     return n
 

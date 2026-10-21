@@ -97,7 +97,7 @@ def test_job_status_falls_back_to_lpstat_without_ipptool(monkeypatch):
         return done(listing[cmd[2]])
     monkeypatch.setattr(core.subprocess, "run", run)
     assert core.job_status(12) == ("printing", "")
-    assert core.job_status(11) == ("done", "")
+    assert core.job_status(11) == ("unknown", "")
     assert core.job_status(99) == ("unknown", "")
 
 

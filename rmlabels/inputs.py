@@ -74,7 +74,7 @@ def open_source(name: str, path: Path | None = None, data: bytes | None = None):
     if not data:
         raise ValueError("the file is empty")
     try:
-        if data.lstrip()[:5] == b"%PDF-":
+        if b"%PDF-" in data[:1024]:
             doc = pymupdf.open(stream=data, filetype="pdf")
             if doc.needs_pass:
                 raise ValueError("the PDF is password-protected")

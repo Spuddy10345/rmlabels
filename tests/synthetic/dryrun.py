@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -52,8 +53,11 @@ def child(spec: dict):
     import pymupdf
     from rmlabels import cli, core
     calls = []
-    cli.subprocess.run = lambda cmd, **kw: calls.append(cmd)
-    core.subprocess.run = lambda cmd, **kw: calls.append(cmd)
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="request id is EPSON_TEST-7 (1 file(s))\n", stderr="")
+    cli.subprocess.run = fake_run
+    core.subprocess.run = fake_run
     out, err = io.StringIO(), io.StringIO()
     status, tb = 0, None
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

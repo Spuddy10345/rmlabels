@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import functools
 import html
+import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -243,6 +245,8 @@ def split_regions(page: pymupdf.Page, items):
                for i in range(len(cut_xs) - 1) for j in range(len(cut_ys) - 1)):
             xs, ys = cut_xs, cut_ys
             break
+    else:
+        xs, ys = [0, W], [0, H]
     regions = []
     for yi in range(len(ys) - 1):
         for xi in range(len(xs) - 1):
@@ -546,12 +550,11 @@ def job_status(job_id: int) -> tuple[str, str]:
 
 
 def _lpstat_status(job_id: int) -> tuple[str, str]:
-    """Fallback when ipptool is missing: only tells waiting/printing apart from finished."""
+    """Fallback when ipptool is missing: only tells that a job is still queued; "completed" also lists cancelled and aborted jobs, so finished is unknown."""
     try:
-        for flag, state in (("not-completed", "printing"), ("completed", "done")):
-            out = subprocess.run(["lpstat", "-W", flag, "-o"], capture_output=True, text=True, timeout=5).stdout
-            if re.search(rf"-{job_id}\s", out):
-                return state, ""
+        out = subprocess.run(["lpstat", "-W", "not-completed", "-o"], capture_output=True, text=True, timeout=5).stdout
+        if re.search(rf"-{job_id}\s", out):
+            return "printing", ""
     except (OSError, subprocess.TimeoutExpired):
         pass
     return "unknown", ""
@@ -584,9 +587,16 @@ def used_after(mask: int, n: int) -> int:
 
 def _write_atomic(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)  # a crash can't leave a half-written file that reads as "fresh sheet"
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    # a crash can't leave a half-written file that reads as "fresh sheet"
 
 
 def read_used_mask() -> int:

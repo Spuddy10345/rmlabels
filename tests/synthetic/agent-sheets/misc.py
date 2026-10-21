@@ -10,8 +10,10 @@ import sys, json
 sys.path.insert(0, "/Users/finjo/code/rmlabels")
 from rmlabels import cli, core, store
 import subprocess
-cli.subprocess.run = lambda *a, **k: None
-core.subprocess.run = lambda *a, **k: None
+def fake_run(cmd, **k):
+    return subprocess.CompletedProcess(cmd, 0, stdout="request id is EPSON_TEST-7 (1 file(s))\n", stderr="")
+cli.subprocess.run = fake_run
+core.subprocess.run = fake_run
 f = "/Users/finjo/code/rmlabels/tests/fixtures/synthetic/01-single/evri-standard-4x6.pdf"
 for i in range(3):
     cli.main(["--print", "--text", f"job {i}", f])

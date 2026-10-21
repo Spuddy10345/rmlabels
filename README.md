@@ -143,7 +143,7 @@ running `RMLABELS_DATA=/tmp/rm RMLABELS_CONFIG=/tmp/rm.toml rmlabels serve --por
 `lp` first on `PATH` so nothing really prints.
 
 The database upgrades itself on start (`MIGRATIONS` in `store.py`) and uses WAL, so there are
-`rmlabels.db-wal` and `-shm` files next to it: copy all three, or use `sqlite3 rmlabels.db .backup`.
+`rmlabels.db-wal` and `-shm` files next to it: use `sqlite3 rmlabels.db ".backup backup.db"` for a consistent copy, or stop the service and copy all three.
 
 `tests/fixtures/private/` is gitignored and holds real labels, which contain addresses. Tests that
 need a fixture that isn't there are skipped. `tests/test_regression.py` checks that the engine
