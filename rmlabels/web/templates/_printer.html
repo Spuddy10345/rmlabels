@@ -1,0 +1,6 @@
+{% if state != 'unknown' %}
+<span class="printer {{ 'problem' if problem or state == 'stopped' else state }}" role="status">
+  <span class="dot" aria-hidden="true"></span>
+  {% if problem %}{{ problem }}{% elif state == 'busy' %}Printer is printing{% else %}Printer ready{% endif %}
+</span>
+{% else %}<span class="muted">Printer status isn't available right now.</span>{% endif %}

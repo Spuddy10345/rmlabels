@@ -4,3 +4,9 @@ __pycache__/
 tests/fixtures/private/
 .pytest_cache/
 .playwright-mcp/
+
+# Synthetic label fixtures are generated (tests/synthetic/make_synthetic_labels.py); only the agent-* scripts are kept
+tests/fixtures/synthetic/*
+!tests/fixtures/synthetic/agent-*/
+tests/fixtures/synthetic/agent-*/*
+!tests/fixtures/synthetic/agent-*/*.py

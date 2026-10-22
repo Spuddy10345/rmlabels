@@ -1,3 +1,5 @@
+import subprocess
+
 import pymupdf
 import pytest
 
@@ -8,8 +10,12 @@ from rmlabels import cli, core, store
 @pytest.fixture
 def no_side_effects(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-    monkeypatch.setattr(core.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="request id is EPSON_TEST-7 (1 file(s))\n", stderr="")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.subprocess, "run", fake_run)
     return calls
 
 
@@ -44,6 +50,7 @@ def test_print_records_history_and_warns_on_repeat(no_side_effects, capsys):
     db = store.connect()
     (job, items), *_ = store.history(db)
     assert job["start"] == 3 and job["labels"] == 1 and items[0]["name"] == "23x.pdf"
+    assert job["cups_job"] == 7 and job["state"] == "sent"      # the number lp reported, to ask CUPS about later
     capsys.readouterr()
     cli.main(["--start", "auto", label])
     out = capsys.readouterr().out
@@ -54,3 +61,13 @@ def test_print_records_history_and_warns_on_repeat(no_side_effects, capsys):
 def test_unknown_preset(no_side_effects):
     with pytest.raises(SystemExit, match="@return"):
         cli.main(["--text", "@nope"])
+
+
+def test_auto_start_fills_the_gaps_in_a_part_used_sheet(no_side_effects, capsys):
+    core.write_used_mask(0b0101)                           # labels 1 and 3 already peeled
+    cli.main(["--print", "--start", "auto", "--text", "AAA", "--text", "BBB", "--text", "CCC"])
+    out = capsys.readouterr().out
+    assert "labels 1 and 3 are treated as already used" in out and "starting at position 2" in out
+    assert core.read_used_mask() == 0b0001                 # two on the first sheet's gaps, one on a fresh sheet
+    job = store.latest_job(store.connect())
+    assert job["used_before"] == 0b0101 and job["start"] == 2 and job["labels"] == 3

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · Labels{% endblock %}
+{% block content %}
+<div class="narrow">
+  <div class="card">
+    <b>{{ message }}</b>
+    <p class="muted">Something went wrong. Check the queue and print history before trying again, as part of this request may already have happened.</p>
+    <a class="button" href="/">Back to the queue</a>
+  </div>
+</div>
+{% endblock %}
