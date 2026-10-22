@@ -10,3 +10,7 @@ tests/fixtures/synthetic/*
 !tests/fixtures/synthetic/agent-*/
 tests/fixtures/synthetic/agent-*/*
 !tests/fixtures/synthetic/agent-*/*.py
+
+.DS_Store
+tests/test_detection.py
+tsbench-results/
