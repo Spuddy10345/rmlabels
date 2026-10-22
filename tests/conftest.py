@@ -9,7 +9,7 @@ import pytest
 _tmp = Path(tempfile.mkdtemp(prefix="rmlabels-test-"))
 os.environ["RMLABELS_DATA"] = str(_tmp / "data")
 os.environ["RMLABELS_CONFIG"] = str(_tmp / "config.toml")
-(_tmp / "config.toml").write_text(f'out_dir = "{_tmp / "out"}"\n[presets]\nreturn = "Return to:\\nTest Person\\n1 Test Road"\n')
+(_tmp / "config.toml").write_text(f'out_dir = "{_tmp / "out"}"\nallowed_hosts = ["testserver"]\n[presets]\nreturn = "Return to:\\nTest Person\\n1 Test Road"\n')
 (_tmp / "out").mkdir()
 
 FIXTURES = Path(__file__).parent / "fixtures"

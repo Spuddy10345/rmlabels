@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<h1 class="sr-only">Print labels</h1>
 <div class="layout">
   <section class="add">
     <form id="upload" class="card drop" hx-post="/upload" hx-encoding="multipart/form-data"
@@ -12,7 +13,7 @@
     </form>
 
     <form class="card" hx-post="/text" hx-target="#panel" hx-include="#controls"
-          hx-on::after-request="if (event.detail.successful) this.reset()">
+          hx-sync="this:drop" hx-disabled-elt="find button">
       <b>Text label</b>
       <textarea name="text" rows="4" placeholder="A note, return address, FRAGILE…"></textarea>
       <div class="row">
@@ -23,30 +24,54 @@
       </div>
     </form>
 
+    <div class="card">
+      <div id="printer" hx-get="/printer" hx-indicator="#quiet" hx-trigger="load, every 30s [!document.hidden]">
+        <span class="muted">Checking the printer…</span></div>
+      <button type="button" class="ghost small" data-arm="Tap again to print the test grid. Use plain paper, not labels."
+              hx-post="/grid" hx-trigger="armed" hx-include="#controls" hx-target="#panel" hx-disabled-elt="this">Print test grid</button>
+    </div>
+
     {% if mail_on %}
-    <form class="card row" hx-post="/mail/check" hx-target="#panel" hx-include="#controls">
+    <form class="card row" hx-post="/mail/check" hx-target="#panel" hx-include="#controls"
+          hx-sync="this:drop" hx-disabled-elt="find button">
       <b>Email</b><span class="muted grow">checked every 5 minutes</span>
       <button type="submit" class="ghost">Check now</button>
     </form>
     {% endif %}
   </section>
 
-  <section id="panel">{{ panel|safe }}</section>
+  <div class="main">
+    <div id="job">{% if chip %}{% with c = chip %}{% include "_job.html" %}{% endwith %}{% endif %}</div>
+    <section id="panel">{{ panel|safe }}</section>
+  </div>
+  <span id="quiet" hidden></span>
+  <div hx-get="/panel/changed" hx-include="#controls" hx-target="#panel" hx-indicator="#quiet" hidden
+       hx-trigger="every 15s [!document.hidden && !document.querySelector('.armed')], visibilitychange[document.visibilityState=='visible'] from:document"></div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<dialog id="zoom" aria-label="Sheet preview"><img alt=""><button type="button" class="ghost small" data-close aria-label="Close preview">✕</button></dialog>
 <script>
   const form = document.getElementById('upload'), input = document.getElementById('files');
   const send = files => { if (!files.length) return; const dt = new DataTransfer();
     for (const f of files) dt.items.add(f); input.files = dt.files; form.requestSubmit(); };
   input.addEventListener('change', () => form.requestSubmit());
   form.addEventListener('htmx:afterRequest', () => { input.value = ''; });
-  ['dragenter', 'dragover'].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); form.classList.add('over'); }));
-  ['dragleave', 'drop'].forEach(e => document.addEventListener(e, ev => { ev.preventDefault(); form.classList.remove('over'); }));
-  document.addEventListener('drop', ev => send(ev.dataTransfer.files));
+  // Only react to dragged *files*: dragging text around the page (or into the text box) must keep working.
+  // dragenter/dragleave fire for every child element crossed, so count them or the highlight flickers.
+  const hasFiles = ev => ev.dataTransfer && [...ev.dataTransfer.types].includes('Files');
+  let depth = 0;
+  document.addEventListener('dragenter', ev => { if (hasFiles(ev)) { ev.preventDefault(); if (depth++ === 0) form.classList.add('over'); } });
+  document.addEventListener('dragover', ev => { if (hasFiles(ev)) ev.preventDefault(); });
+  document.addEventListener('dragleave', ev => { if (hasFiles(ev) && --depth <= 0) { depth = 0; form.classList.remove('over'); } });
+  document.addEventListener('drop', ev => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault(); depth = 0; form.classList.remove('over');
+    send(ev.dataTransfer.files);
+  });
+  // A pasted screenshot becomes a label wherever focus is, including the text box; pasted text is left alone.
   document.addEventListener('paste', ev => {
-    if (ev.target.closest('textarea')) return;
     const files = [...ev.clipboardData.items].filter(i => i.kind === 'file').map(i => i.getAsFile());
     if (files.length) { ev.preventDefault(); send(files.map((f, n) => new File([f], f.name && f.name !== 'image.png' ? f.name : `pasted-${Date.now()}-${n}.png`, {type: f.type}))); }
   });

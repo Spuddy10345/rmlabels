@@ -4,6 +4,10 @@
     nudge_x = 0.0                      # printer calibration offset in mm (+ = right)
     nudge_y = 0.0                      #                                   (+ = down)
     out_dir = "~/Downloads"            # where finished sheets are saved
+    allowed_hosts = []                 # extra Host names the web UI answers to (it already accepts localhost,
+                                       # 127.0.0.1 and *.ts.net, which covers `tailscale serve`)
+    api_token = ""                     # if set, /api/upload (the phone Shortcut) must send
+                                       # "Authorization: Bearer <token>"; everything else is unchanged
 
     [presets]                          # text labels: --text @return, or buttons in the web UI
     return = "Return to:\\nFin Jones\\n..."
@@ -39,6 +43,8 @@ def load() -> dict:
     cfg.setdefault("nudge_y", 0.0)
     cfg["out_dir"] = Path(cfg.get("out_dir", "~/Downloads")).expanduser()
     cfg.setdefault("presets", {})
+    cfg.setdefault("allowed_hosts", [])
+    cfg.setdefault("api_token", "")
     mail = cfg.setdefault("mail", {})
     mail.setdefault("host", "127.0.0.1")
     mail.setdefault("port", 1143)
