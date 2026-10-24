@@ -50,7 +50,15 @@ def page_items(page: pymupdf.Page):
     """(kind, rect) for every visibly drawn thing, minus full-page backgrounds.
     Text is taken per span (bboxlog text runs can span half the page)."""
     area = page.rect.get_area()
-    overlays = [r for _, r in decorative_images(page)]
+    overlays = decorative_images(page)
+    other_images = [
+        pymupdf.Rect(info["bbox"])
+        for info in page.get_image_info(xrefs=True)
+        if not any(
+            info.get("xref") == xref and abs(pymupdf.Rect(info["bbox"]) - overlay_rect) < 2
+            for xref, overlay_rect in overlays
+        )
+    ]
     out = []
     for kind, r in page.get_bboxlog():
         r = pymupdf.Rect(r) & page.rect
@@ -58,7 +66,9 @@ def page_items(page: pymupdf.Page):
             continue
         if kind.startswith("fill-path") and r.get_area() > 0.9 * area:
             continue  # white page background
-        if "image" in kind and any(abs(r - o) < 2 for o in overlays):
+        if ("image" in kind
+                and any(abs(r - overlay_rect) < 2 for _, overlay_rect in overlays)
+                and not any(abs(r - image_rect) < 2 for image_rect in other_images)):
             continue  # cut-guide overlay drawn as a page-sized picture
         out.append((kind, r))
     for b in page.get_text("dict")["blocks"]:
@@ -152,6 +162,8 @@ def decorative_images(page: pymupdf.Page):
     found = []
     area = page.rect.get_area()
     for xref, smask, *_, filt, _ in page.get_images(full=True):
+        if not smask:
+            continue  # sparse opaque labels can also have very little ink
         if filt in ("DCTDecode", "JPXDecode"):
             continue  # a photo or scan, never a flat overlay (and slow to decode)
         for r in page.get_image_rects(xref):
@@ -168,6 +180,7 @@ def decorative_images(page: pymupdf.Page):
 
 
 DARK = bytes(1 if v < 200 else 0 for v in range(256))  # grey level -> "would show as ink"
+OPAQUE = bytes(1 if v > 20 else 0 for v in range(256))
 
 
 def ink_fraction(doc: pymupdf.Document, xref: int, smask: int = 0) -> float:
@@ -178,8 +191,16 @@ def ink_fraction(doc: pymupdf.Document, xref: int, smask: int = 0) -> float:
     gray = pymupdf.Pixmap(pymupdf.csGRAY, pix) if pix.n != 1 else pix
     dark = gray.samples.translate(DARK).count(1) / (gray.width * gray.height)
     if smask:  # a soft mask decides what shows: ink needs dark *and* opaque
-        opaque = alpha.samples.translate(bytes(0 if v <= 20 else 1 for v in range(256))).count(1) / len(alpha.samples)
-        return min(dark, opaque)
+        alpha = pymupdf.Pixmap(doc, smask)
+        if alpha.n != 1 or alpha.width != gray.width or alpha.height != gray.height:
+            raise ValueError("soft mask dimensions do not match image")
+        dark_pixels = gray.samples.translate(DARK)
+        opaque_pixels = alpha.samples.translate(OPAQUE)
+        visible_ink = (
+            int.from_bytes(dark_pixels, "little")
+            & int.from_bytes(opaque_pixels, "little")
+        ).bit_count()
+        return visible_ink / (gray.width * gray.height)
     return dark
 
 
