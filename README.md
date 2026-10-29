@@ -48,7 +48,9 @@ rmlabels --text "Please leave with\nnumber 12"      # preview a note
 
 **Input**
 - **PDFs:** each page counts as one label. Whitespace is trimmed, Click & Drop 2-up and 4-up pages
-  are split, and landscape labels are rotated. Parcel2Go's stray `↑` is removed. Pages with only
+  are split, and landscape labels are rotated. Parcel2Go's stray `↑` is removed. Full-page 4×6in
+  thermal labels, including FedEx international ones that are a single raster picture, are placed
+  whole and shrunk to about 87%, and their barcodes still scan. Pages with only
   text (no barcode or image) are skipped with a warning; use `--text` for notes instead.
 - **Images:** PNG, JPG, HEIC, WebP, GIF, TIFF and BMP. White margins are trimmed and the image is
   scaled to fill the label. Crop screenshots first if they include app chrome, because only white
